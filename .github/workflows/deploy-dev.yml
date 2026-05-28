@@ -1,0 +1,58 @@
+name: Deploy UI — DEV
+
+on:
+  push:
+    branches:
+      - release-dev
+
+permissions:
+  id-token: write  # OIDC token
+  contents: write  # git tag push
+
+env:
+  AWS_REGION: us-east-1
+
+jobs:
+  # ── Deploy ───────────────────────────────────────────────────────────────────
+  deploy:
+    name: Sync to S3 — DEV
+    runs-on: ubuntu-22.04
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN_DEV }}
+          aws-region:     ${{ env.AWS_REGION }}
+
+      - name: Sync site files to S3
+        run: |
+          aws s3 sync . s3://${{ vars.S3_BUCKET_NAME_DEV }} \
+            --delete \
+            --exclude ".git/*" \
+            --exclude ".github/*"
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ${{ vars.CLOUDFRONT_DISTRIBUTION_ID_DEV }} \
+            --paths "/*"
+
+  # ── Tag Release ──────────────────────────────────────────────────────────────
+  tag:
+    name: Tag Release
+    runs-on: ubuntu-22.04
+    needs: deploy
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create release tag
+        run: |
+          TAG="release-dev-SHA-${GITHUB_SHA::7}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "UI DEV deploy | sha=${GITHUB_SHA} | actor=${{ github.actor }}"
+          git push origin "$TAG"
+          echo "Tagged: $TAG"
